@@ -1,20 +1,24 @@
 ﻿#=======================================================================#
 #
 # Author:				Collin Chaffin
-# Last Modified:		10/18/2014 10:00 PM
+# Last Modified:		10/28/2014 12:15 AM
 # Filename:				PSTwitter.psm1
 #
 #
 # Changelog:
 #
-#	v 1.0	:	10/18/2014	:	Initial release
+#	v 1.0.0.1	:	10/18/2014	:	Initial release
+#	v 1.0.0.2	:	10/28/2014	:	Added 7 new special char to pre(hex) escape
+#									and altered code to deal with powershell
+#									throwing ex for already valid param length
+#									due to escaping adding % char length
 #
 # Notes:
 #
 #	This module utilizes personal Twitter's user-specific API
 #	information to perform OAuth connection to Twitter and submit either a
 #	Tweet or a direct message to a single Twitter recipient.  This module
-#	was inspired by others but became a rewrite to more formal modular
+#	was inspired by Adam Bertram and others but became a rewrite to more formal modular
 #	functions using objects which perhaps can spur additional development
 #	interest and community-contributed growth and hopefully simplify required
 #	code changes to address Twitter API changes in the future!
@@ -847,8 +851,7 @@ function ConvertTo-HexEscaped
 	[CmdletBinding()]
 	[OutputType([System.String])]
 	param (
-		[Parameter(Mandatory = $true)]
-		[ValidateLength(1, 140)]
+		[Parameter(Mandatory = $true)]		
 		[System.String]
 		$InputText
 	)
@@ -859,14 +862,14 @@ function ConvertTo-HexEscaped
 	PROCESS
 	{
 		try
-		{
+		{			
 			# Handle the special characters Twitter does not handle properly and escape them
-			[string[]] $specialChar = @("!", "*", "'", "(", ")")
+			[string[]] $specialChar = @('%', '=', "+", "&", '[', ']', "!", "*", "'", "(", ")", ",")
+			
 			for ($i = 0; $i -lt $specialChar.Length; $i++)
 			{
-				$InputText = $InputText.Replace($specialChar[$i], [System.Uri]::HexEscape($specialChar[$i]))
-				
-			}
+				$InputText = $InputText.Replace($specialChar[$i], [System.Uri]::HexEscape($specialChar[$i]))				
+			}			
 			return $InputText
 		}
 		catch
@@ -913,15 +916,15 @@ function Send-TwitterTweet
 	PROCESS
 	{
 		try
-		{
+		{			
 			# Twitter does not handle a few special characters properly so let's hexescape them
-			$TweetMessage = $(ConvertTo-HexEscaped -InputText $TweetMessage)
+			$fixedTweetMessage = $(ConvertTo-HexEscaped -InputText $TweetMessage)
 			
 			# Call our main connect routine to do the oAuth heavy lifting
-			$oAuthRequestString = (Connect-OAuthTwitter -TweetMessage $TweetMessage)
+			$oAuthRequestString = (Connect-OAuthTwitter -TweetMessage $fixedTweetMessage)
 			
 			# Set up the HTTP POST body
-			$httpBody = "status=$TweetMessage"
+			$httpBody = "status=$fixedTweetMessage"
 			
 			(Write-Status -Message "START  - Sending HTTP POST via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
 			
@@ -984,16 +987,16 @@ function Send-TwitterDirect
 		try
 		{
 			# Twitter does not handle a few special characters properly so let's hexescape them
-			$DirectMessage = $(ConvertTo-HexEscaped -InputText $DirectMessage)
+			$fixedDirectMessage = $(ConvertTo-HexEscaped -InputText $DirectMessage)
 			
 			# Call our main connect routine to do the oAuth heavy lifting
-			$oAuthRequestString = (Connect-OAuthTwitter -DirectMessage $DirectMessage -To $To)
+			$oAuthRequestString = (Connect-OAuthTwitter -DirectMessage $fixedDirectMessage -To $To)
 			
 			# Should not have to do this but run recipient though standard escaping just in case
 			$To = [System.Uri]::EscapeDataString($To)
 			
 			# Set up the HTTP POST body
-			$httpBody = "text=$DirectMessage&screen_name=$To"
+			$httpBody = "text=$fixedDirectMessage&screen_name=$To"
 			
 			(Write-Status -Message "START  - Sending HTTP POST via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
 			
