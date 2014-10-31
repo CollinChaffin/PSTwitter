@@ -90,8 +90,11 @@ $psTwitterDebugging = $true
 $psTwitterLogging = $true
 
 # Twitter-specific API variables that may change in the future
-$Global:psTwitterEndpointFriends		= 'GET&https://api.twitter.com/1.1/friends/list.json'
-$Global:psTwitterEndpointFollowers		= 'GET&https://api.twitter.com/1.1/followers/list.json'
+$Global:psTwitterEndpointUserLookup		= 'GET&https://api.twitter.com/1.1/users/lookup.json'
+$Global:psTwitterEndpointFriendsList	= 'GET&https://api.twitter.com/1.1/friends/list.json'
+$Global:psTwitterEndpointFriendsIds		= 'GET&https://api.twitter.com/1.1/friends/ids.json'
+$Global:psTwitterEndpointFollowersList	= 'GET&https://api.twitter.com/1.1/followers/list.json'
+$Global:psTwitterEndpointFollowersIds	= 'GET&https://api.twitter.com/1.1/followers/ids.json'
 $Global:psTwitterEndpointTweet			= 'POST&https://api.twitter.com/1.1/statuses/update.json'
 $Global:psTwitterEndpointDirectMessage	= 'POST&https://api.twitter.com/1.1/direct_messages/new.json'
 $Global:psTwitterOAuthSignatureMethod	= 'HMAC-SHA1'
@@ -113,212 +116,6 @@ $Global:psTwitterLogPath = $($psTwitterInvocationPath) + "Logs\"
 #########################################################################
 
 function Connect-OAuthTwitter
-{
-	<#
-	.SYNOPSIS
-		This function utilizes personal Twitter's user-specific API information to perform
-		OAuth connection to Twitter and set up the final OAuth string needed to then post a
-		Tweet or a direct message to a single Twitter recipient using the REST API.
-		
-	.DESCRIPTION
-		Author:  		Collin Chaffin
-		Description:	This function utilizes personal Twitter's user-specific API
-						information to perform OAuth connection to Twitter and submit either a 
-						Tweet or a direct message to a single Twitter recipient.
-	
-	.PARAMETER TweetMessage
-		Tweet message text
-	
-	.PARAMETER DirectMessage
-		Direct message text
-	
-	.PARAMETER To
-		Single Twitter recipient to whom you are sending a direct message
-	
-    .PARAMETER Following
-        The screen name of the user for whom to return results for
-    
-    .PARAMETER Followers
-        The screen name of the user for whom to return results for
-
-	.EXAMPLE
-		This example generates all required OAuth information and sets up final OAuth string to
-		then send a direct message using the REST API:
-			$oAuthRequestString = (Connect-OAuthTwitter -DirectMessage "The #PSTwitter Powershell Module is working!" -To "CollinChaffin")
-			Invoke-RestMethod .....-Headers @{ 'Authorization' = $oAuthRequestString }.....
-	
-	.EXAMPLE
-		This example generates all required OAuth information and sets up final OAuth string to
-		then send a tweet using the REST API:
-			$oAuthRequestString = (Connect-OAuthTwitter -TweetMessage "Testing the #PSTwitter Windows Powershell module for Twitter!")
-			Invoke-RestMethod .....-Headers @{ 'Authorization' = $oAuthRequestString }.....
-	#>
-	[CmdletBinding(DefaultParameterSetName = 'Tweeting')]
-	[OutputType([System.String])]
-	param	(		
-		[Parameter(ParameterSetName = 'Tweeting', Mandatory = $true, HelpMessage = 'Please enter tweet message text')]
-			[ValidateNotNullOrEmpty()]
-			[System.String]
-			$TweetMessage,
-		[Parameter(ParameterSetName = 'Direct',
-			Mandatory = $true,
-			HelpMessage = 'Please enter your direct message text and note the TO switch is also required for target recipient')]
-			[ValidateNotNullOrEmpty()]
-			[System.String]
-			$DirectMessage,
-		[Parameter(ParameterSetName = 'Direct',
-			Mandatory = $true,
-			HelpMessage = 'Please enter Twitter recipient to whom you are sending a direct message')]
-			[ValidateNotNullOrEmpty()]
-			[System.String]
-			$To,
-		[Parameter(ParameterSetName = 'Followers', Mandatory = $true, HelpMessage = 'Please enter screen name')]
-			[ValidateNotNullOrEmpty()]
-			[System.String]
-			$Followers,
-		[Parameter(ParameterSetName = 'Following',
-			Mandatory = $true,
-			HelpMessage = 'Please enter screen name')]
-			[ValidateNotNullOrEmpty()]
-			[System.String]
-			$Following,
-        [Parameter(ParameterSetName = 'Followers', Mandatory = $False, HelpMessage = 'Please enter cursor position (default -1)')]
-		[Parameter(ParameterSetName = 'Following', Mandatory = $False, HelpMessage = 'Please enter cursor position (default -1)')]
-			[System.String]
-			$Cursor = -1
-	)	
-	BEGIN
-	{		
-		(Write-Status -Message "START  - Connect-OAuthTwitter function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-		try
-		{
-			(Write-Status -Message "START  - Loading DOTNET assemblies" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-			[Reflection.Assembly]::LoadWithPartialName("System.Security") | Out-Null
-			[Reflection.Assembly]::LoadWithPartialName("System.Net") | Out-Null
-			[Reflection.Assembly]::LoadWithPartialName("System.Web") | Out-Null
-			(Write-Status -Message "FINISH - Loading DOTNET assemblies" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-		}
-		catch
-		{
-			Throw $("ERROR OCCURRED WHILE LOADING REQUIRED DOTNET ASSEMBLIES " + $_.Exception.Message)			
-		}
-		
-		# Retrieve required user-specific Twitter API info from registry
-		try
-		{			
-			if ($((Test-Path -Path HKCU:\Software\PSTwitter) -eq $false) `
-			   -or $((Get-Item HKCU:\Software\PSTwitter).getvalue("APIKey") -eq $null) `
-			   -or $((Get-Item HKCU:\Software\PSTwitter).getvalue("APISecret") -eq $null) `
-			   -or $((Get-Item HKCU:\Software\PSTwitter).getvalue("AccessToken") -eq $null) `
-			   -or $((Get-Item HKCU:\Software\PSTwitter).getvalue("AccessTokenSecret") -eq $null)
-			   )
-			{
-				(Write-Status -Message "Twitter API settings not found - prompting operator" -Status "WARNING" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-				# Call Set-TwitterOAuthTokens function to prompt for credentials and store them
-				Set-TwitterOAuthTokens
-			}
-			else
-			{
-				(Write-Status -Message "START  - Retrieving Twitter API settings from registry" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-				$global:apiKey				= (Get-Item HKCU:\Software\PSTwitter).getvalue("APIKey")
-				$global:apiSecret			= (Get-Item HKCU:\Software\PSTwitter).getvalue("APISecret")
-				$global:accessToken			= (Get-Item HKCU:\Software\PSTwitter).getvalue("AccessToken")
-				$global:accessTokenSecret	= (Get-Item HKCU:\Software\PSTwitter).getvalue("AccessTokenSecret")
-				(Write-Status -Message "FINISH - Retrieving Twitter API settings from registry" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-			}			
-		}
-		catch
-		{
-			Throw $("ERROR OCCURRED WHILE LOADING REQUIRED TWITTER API INFORMATION " + $_.Exception.Message)
-		}
-	}
-	PROCESS
-	{
-		try
-		{
-			# Create a custom PSObject to store all require oAuth info and simply pass a single object to helper functions			
-			$objOAuth = @()
-			$objOAuth = New-Object -TypeName PSObject
-			$objOAuth | Add-Member -Name 'oauth_consumer_key' -Value $($apiKey) -MemberType NoteProperty -Force
-			$objOAuth | Add-Member -Name 'oauth_signature_method' -Value $($psTwitterOAuthSignatureMethod) -MemberType NoteProperty -Force
-			$objOAuth | Add-Member -Name 'oauth_token' -Value $($accessToken) -MemberType NoteProperty -Force
-			$objOAuth | Add-Member -Name 'oauth_version' -Value $($psTwitterOAuthVersion) -MemberType NoteProperty -Force
-			$objOAuth | Add-Member -Name 'oauth_urlAPIendpoint' -Value $(switch ($PsCmdlet.ParameterSetName) { 
-                                                                                    "Tweeting"{ $psTwitterEndpointTweet }; 
-                                                                                    "Direct"{ $psTwitterEndpointDirectMessage }; 
-                                                                                    "Followers"{ $psTwitterEndpointFollowers }; 
-                                                                                    "Following"{ $psTwitterEndpointFollowing }; 
-                                                                                                            }) -MemberType NoteProperty -Force
-			$objOAuth | Add-Member -Name 'oauth_consumer_key_secret' -Value $($APISecret) -MemberType NoteProperty -Force
-			$objOAuth | Add-Member -Name 'oauth_token_secret' -Value $($accessTokenSecret) -MemberType NoteProperty -Force
-			
-			# Generate Nonce key PSObject property using helper function
-			$objOAuth | Add-Member -Name 'oauth_nonce' -Value $(New-TwitterOAuthNonce) -MemberType NoteProperty -Force
-			
-			# Generate OAuth epoch-based timestamp PSObject property using helper function
-			$objOAuth | Add-Member -Name 'oauth_timestamp' -Value $(New-TwitterOAuthTimeStamp) -MemberType NoteProperty -Force
-			
-			# Determine are we tweeting or sending a direct message on our parameter set call
-			switch ($PSCmdlet.ParameterSetName)
-			{
-				'Followers'
-				{
-					# Since we are tweeting, add the tweet message to the custom PSObject as property required for signature
-					$objOAuth | Add-Member -Name 'oauth_followers' -Value $($Followers) -MemberType NoteProperty -Force
-					$objOAuth | Add-Member -Name 'oauth_cursor' -Value $($Cursor) -MemberType NoteProperty -Force
-					
-					# Generate OAuth signature for tweet request
-					$oAuthSignature = (New-TwitterOAuthSignature -objOAuth $objOAuth -Followers)
-				}
-				'Following'
-				{
-					# Since we are tweeting, add the tweet message to the custom PSObject as property required for signature
-					$objOAuth | Add-Member -Name 'oauth_following' -Value $($Following) -MemberType NoteProperty -Force
-					$objOAuth | Add-Member -Name 'oauth_cursor' -Value $($Cursor) -MemberType NoteProperty -Force
-					
-					# Generate OAuth signature for tweet request
-					$oAuthSignature = (New-TwitterOAuthSignature -objOAuth $objOAuth -Following)
-				}
-				'Tweeting'
-				{
-					# Since we are tweeting, add the tweet message to the custom PSObject as property required for signature
-					$objOAuth | Add-Member -Name 'oauth_tweetmessage' -Value $($TweetMessage) -MemberType NoteProperty -Force
-					
-					# Generate OAuth signature for tweet request
-					$oAuthSignature = (New-TwitterOAuthSignature -objOAuth $objOAuth -Tweeting)
-				}
-				'Direct'
-				{
-					# Since we are sending a direct message, add the message text and recipient to the custom PSObject as property required for signature
-					$objOAuth | Add-Member -Name 'oauth_directmessage' -Value $($DirectMessage) -MemberType NoteProperty -Force
-					$objOAuth | Add-Member -Name 'oauth_directrecipient' -Value $($To) -MemberType NoteProperty -Force
-					
-					# Generate OAuth signature for direct message request
-					$oAuthSignature = (New-TwitterOAuthSignature -objOAuth $objOAuth -Direct)
-				}
-			}
-			
-			# Add the generated final signature as a property to the same custom PSObject
-			$objOAuth | Add-Member -Name 'oauth_signature' -Value $($oAuthSignature) -MemberType NoteProperty -Force
-			
-			# Finally, generate the final OAuth request string with all the above generated information passing one single custom PSObject			
-			[string]$oAuthRequestString = (New-TwitterOAuthString -objOAuth $objOAuth)
-			
-			# Return the one single oAuth request POST string to hand back to calling function (tweet or direct message) to POST it
-			Return $oAuthRequestString;
-		}
-		catch
-		{
-			Throw $("ERROR OCCURRED WHILE BUILDING OAUTH REQUEST " + $_.Exception.Message)
-		}
-	}
-	END
-	{
-		(Write-Status -Message "FINISH - Connect-OAuthTwitter function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-	}
-}
-
-function Connect-OAuthTwitterUniversal
 {
 	<#
 	.SYNOPSIS
@@ -440,7 +237,7 @@ function Connect-OAuthTwitterUniversal
             # Generate Parameters
 			$objOAuth | Add-Member -Name 'oauth_parameters' -Value $($Parameters) -MemberType NoteProperty -Force
 
-            $oAuthSignature = (New-TwitterOAuthSignature2 -objOAuth $objOAuth)
+            $oAuthSignature = (New-TwitterOAuthSignature -objOAuth $objOAuth)
 
 			# Add the generated final signature as a property to the same custom PSObject
 			$objOAuth | Add-Member -Name 'oauth_signature' -Value $($oAuthSignature) -MemberType NoteProperty -Force
@@ -580,131 +377,6 @@ function New-TwitterOAuthSignature
 		$oAuthSignature
 		ptUHUftvP0l6JQoJ+7yBa//uZcE=
 	#>
-	[CmdletBinding(DefaultParameterSetName = 'Tweeting')]
-	[OutputType([System.String])]
-	param (
-		[Parameter(Position = 0, ParameterSetName = 'Followers', Mandatory = $true)]
-		[Parameter(Position = 0, ParameterSetName = 'Following', Mandatory = $true)]
-		[Parameter(Position = 0, ParameterSetName = 'Tweeting', Mandatory = $true)]
-		[Parameter(Position = 0, ParameterSetName = 'Direct', Mandatory = $true)]
-			[ValidateNotNullOrEmpty()]
-			[PSObject]
-			$objOAuth,
-		[Parameter(ParameterSetName = 'Followers',Mandatory = $false)]		
-			[Switch]
-			$Followers,
-		[Parameter(ParameterSetName = 'Following',Mandatory = $false)]		
-			[Switch]
-			$Following,
-		[Parameter(ParameterSetName = 'Tweeting',Mandatory = $false)]		
-			[Switch]
-			$Tweeting,
-		[Parameter(ParameterSetName = 'Direct', Mandatory = $false)]		
-			[Switch]
-			$Direct	
-	)
-	BEGIN
-	{
-		(Write-Status -Message "START  - New-TwitterOAuthSignature function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-	}
-	PROCESS
-	{
-		try
-		{
-			(Write-Status -Message "START  - Building OAuth signature" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-			
-			# Build base signature authorization parameters
-            switch ($PSCmdlet.ParameterSetName)
-			{
-				'Following' { $oAuthSignatureBase = 'GET&' }
-				'Followers' { $oAuthSignatureBase = 'GET&' }
-				'Tweeting'  { $oAuthSignatureBase = 'POST&' }
-				'Direct'    { $oAuthSignatureBase = 'POST&' }
-			}
-			#$oAuthSignatureBase = 'POST&'
-			$oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_urlAPIendpoint"].Value)")+"&"			
-			$oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_consumer_key"].Name)=$($objOAuth.PSObject.Properties["oauth_consumer_key"].Value)&")
-			$oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_nonce"].Name)=$($objOAuth.PSObject.Properties["oauth_nonce"].Value)&")
-			$oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_signature_method"].Name)=$($objOAuth.PSObject.Properties["oauth_signature_method"].Value)&")
-			$oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_timestamp"].Name)=$($objOAuth.PSObject.Properties["oauth_timestamp"].Value)&")
-			$oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_token"].Name)=$($objOAuth.PSObject.Properties["oauth_token"].Value)&")
-			$oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_version"].Name)=$($objOAuth.PSObject.Properties["oauth_version"].Value)&")
-			
-			# Add final values to signature authorization parameters depending on whether it is a Tweet or direct message
-			switch ($PSCmdlet.ParameterSetName)
-			{
-				'Following'
-				{
-					$oAuthSignatureBase += [System.Uri]::EscapeDataString("screen_name=$($objOAuth.PSObject.Properties["oauth_following"].Value)")
-					$oAuthSignatureBase += [System.Uri]::EscapeDataString("cursor=$($objOAuth.PSObject.Properties["oauth_cursor"].Value)")
-				}
-				'Followers'
-				{
-					$oAuthSignatureBase += [System.Uri]::EscapeDataString("screen_name=$($objOAuth.PSObject.Properties["oauth_followers"].Value)")
-                    $oAuthSignatureBase += [System.Uri]::EscapeDataString("cursor=$($objOAuth.PSObject.Properties["oauth_cursor"].Value)")
-				}
-				'Tweeting'
-				{
-					$oAuthSignatureBase += [System.Uri]::EscapeDataString("status=$($objOAuth.PSObject.Properties["oauth_tweetmessage"].Value)")
-				}
-				'Direct'
-				{
-					$oAuthSignatureBase += [System.Uri]::EscapeDataString("screen_name=$($objOAuth.PSObject.Properties["oauth_directrecipient"].Value)&")
-					$oAuthSignatureBase += [System.Uri]::EscapeDataString("text=$($objOAuth.PSObject.Properties["oauth_directmessage"].Value)")					
-				}
-			}
-			
-            Write-Warning $oAuthSignatureBase
-            $oAuthSignatureBase = $oAuthSignatureBase | sort
-            Write-Warning $oAuthSignatureBase
-
-			# Create a SHA1 hash from the oAuth signature using apisecret+accesstokensecret as HMACSHA1 key
-			$signatureKey = [System.Uri]::EscapeDataString($($objOAuth.PSObject.Properties["oauth_consumer_key_secret"].Value)) + "&" + [System.Uri]::EscapeDataString($($objOAuth.PSObject.Properties["oauth_token_secret"].Value))
-			
-			# Create HMACSHA1 object and call method using key to create hash
-			$objSHA1 = New-Object -TypeName System.Security.Cryptography.HMACSHA1
-			$objSHA1.Key = [System.Text.Encoding]::ASCII.GetBytes($signatureKey)
-			$oAuthSignature = [System.Convert]::ToBase64String($objSHA1.ComputeHash([System.Text.Encoding]::ASCII.GetBytes($oAuthSignatureBase)));
-			
-			(Write-Status -Message "FINISH - Building OAuth signature" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-			
-			return $oAuthSignature;
-		}
-		catch
-		{
-			Throw $("ERROR OCCURRED GENERATING NEW OAUTH SIGNATURE " + $_.Exception.Message)
-		}
-		finally
-		{
-			# Dispose of HMACSHA1 object
-			$objSHA1.Dispose()
-		}
-	}
-	END
-	{
-		(Write-Status -Message "FINISH - New-TwitterOAuthSignature function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-	}
-}
-
-function New-TwitterOAuthSignature2
-{
-	<#
-	.SYNOPSIS
-		Generate a new signature for Twitter oAuth request
-
-	.DESCRIPTION
-		Author:  		Collin Chaffin
-		Description:	This function generates a new signature for Twitter oAuth request
-		
-	.PARAMETER objOAuth
-		[PSObject] Custom PSObject containing all required OAuth information
-	
-	.EXAMPLE
-		$oAuthSignature = (New-TwitterOAuthSignature -objOAuth $objOAuth -Tweeting)
-	
-		$oAuthSignature
-		ptUHUftvP0l6JQoJ+7yBa//uZcE=
-	#>
 	[CmdletBinding()]
 	[OutputType([System.String])]
 	param (
@@ -715,7 +387,7 @@ function New-TwitterOAuthSignature2
 	)
 	BEGIN
 	{
-		(Write-Status -Message "START  - New-TwitterOAuthSignature2 function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+		(Write-Status -Message "START  - New-TwitterOAuthSignature function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
 	}
 	PROCESS
 	{
@@ -736,10 +408,12 @@ function New-TwitterOAuthSignature2
 			$oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_timestamp"].Name)=$($objOAuth.PSObject.Properties["oauth_timestamp"].Value)&")
 			$oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_token"].Name)=$($objOAuth.PSObject.Properties["oauth_token"].Value)&")
 			$oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_version"].Name)=$($objOAuth.PSObject.Properties["oauth_version"].Value)&")
-			$oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_parameters"].Value)")
 			
-            $oAuthSignatureBase = $oAuthSignatureBase | sort
-            
+            $oAuthSignatureBase += [System.Uri]::EscapeDataString("$($objOAuth.PSObject.Properties["oauth_parameters"].Value)")
+			
+            #$oAuthSignatureBase = $oAuthSignatureBase | sort
+            Write-Warning $oAuthSignatureBase
+
 			# Create a SHA1 hash from the oAuth signature using apisecret+accesstokensecret as HMACSHA1 key
 			$signatureKey = [System.Uri]::EscapeDataString($($objOAuth.PSObject.Properties["oauth_consumer_key_secret"].Value)) + "&" + [System.Uri]::EscapeDataString($($objOAuth.PSObject.Properties["oauth_token_secret"].Value))
 			
@@ -747,7 +421,8 @@ function New-TwitterOAuthSignature2
 			$objSHA1 = New-Object -TypeName System.Security.Cryptography.HMACSHA1
 			$objSHA1.Key = [System.Text.Encoding]::ASCII.GetBytes($signatureKey)
 			$oAuthSignature = [System.Convert]::ToBase64String($objSHA1.ComputeHash([System.Text.Encoding]::ASCII.GetBytes($oAuthSignatureBase)));
-			
+			Write-Warning $oAuthSignature
+
 			(Write-Status -Message "FINISH - Building OAuth signature" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
 			
 			return $oAuthSignature;
@@ -764,7 +439,7 @@ function New-TwitterOAuthSignature2
 	}
 	END
 	{
-		(Write-Status -Message "FINISH - New-TwitterOAuthSignature2 function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+		(Write-Status -Message "FINISH - New-TwitterOAuthSignature function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
 	}
 }
 
@@ -1179,7 +854,319 @@ function ConvertTo-HexEscaped
 	}
 }
 
+function Get-TwitterFriends
+{
+	<#
+	.SYNOPSIS
+		Sends a Twitter Tweet
+	
+	.DESCRIPTION
+		Author:  		Collin Chaffin
+		Description:	Sends a Twitter Tweet using OAuth and REST							
+	
+	.PARAMETER TweetMessage
+		The message text of the tweet to be posted
+	
+	.EXAMPLE
+		Send-TwitterTweet -TweetMessage "This is my first tweet using the #PSTwitter Powershell Module!"
+	
+		This example will send a tweet with the above tweet text
+	#>
+	[CmdletBinding()]
+	param (
+		[Parameter(Mandatory = $true)]
+		[ValidateLength(1, 140)]
+		[System.String]
+		$Username
+	)
+	BEGIN
+	{
+		(Write-Status -Message "START  - Get-TwitterFriends function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+	PROCESS
+	{
+		try
+		{			
+
+            $Friends = @()
+
+            $Ids = Get-TwitterFriendsIds $Username
+
+            $m = 100; $i=0; $j=0
+            
+            while ($i -lt $ids.ids.count) {
+
+                $i++; $j++
+
+                If ($j -eq $m) {
+                
+                    $iStart = $i - $m; $iEnd = $i - 1
+                    $user_id = $Ids.ids[$iStart..$iEnd]
+                    $Friends += Get-TwitterUserLookup ($user_id -join ',')
+                    $j=0 
+
+                }
+
+            }
+
+            If ($j) { 
+            
+                $iStart = $i - $j; $iEnd = $i - 1
+                $user_id = $Ids.ids[$iStart..$iEnd]
+                $Friends += Get-TwitterUserLookup ($user_id -join ',')
+            
+            }
+
+
+            Return $Friends;
+
+		}
+		catch
+		{
+			Throw $("ERROR OCCURRED SENDING TWEET " + $_.Exception.Message)
+		}
+	}
+	END
+	{
+		(Write-Status -Message "FINISH - Get-TwitterFriends function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+}
+
+function Get-TwitterFriendsList
+{
+	<#
+	.SYNOPSIS
+		Sends a Twitter Tweet
+	
+	.DESCRIPTION
+		Author:  		Collin Chaffin
+		Description:	Sends a Twitter Tweet using OAuth and REST							
+	
+	.PARAMETER TweetMessage
+		The message text of the tweet to be posted
+	
+	.EXAMPLE
+		Send-TwitterTweet -TweetMessage "This is my first tweet using the #PSTwitter Powershell Module!"
+	
+		This example will send a tweet with the above tweet text
+	#>
+	[CmdletBinding()]
+	param (
+		[Parameter(Mandatory = $true)]
+		[ValidateLength(1, 140)]
+		[System.String]
+		$Username
+	)
+	BEGIN
+	{
+		(Write-Status -Message "START  - Get-TwitterFriendsList function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+	PROCESS
+	{
+		try
+		{			
+			# Twitter does not handle a few special characters properly so let's hexescape them
+			$fixedUsername = $(ConvertTo-HexEscaped -InputText $Username)
+			
+            $Result = @()
+
+            $cursor = -1
+            #While ($cursor -ne 0) {
+
+                $psTwitterMethod = ($psTwitterEndpointFriendsList -Split '&')[0]
+                $psTwitterEndpoint = ($psTwitterEndpointFriendsList -Split '&')[1]
+			    $psTwitterParameters = "screen_name=$($fixedUsername)"
+
+                # Call our main connect routine to do the oAuth heavy lifting
+			    $oAuthRequestString = (Connect-OAuthTwitter $psTwitterEndpointFriendsList $psTwitterParameters )
+
+			    (Write-Status -Message "START  - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+			
+			    # Call the REST API to handle the final OAUTH GET
+                
+                $URI = "$($psTwitterEndpoint)?$psTwitterParameters"
+
+			    $Result += Invoke-RestMethod -URI $URI -Method $psTwitterMethod -Headers @{ 'Authorization' = $oAuthRequestString } -ContentType "application/x-www-form-urlencoded" #| Out-Null
+
+    			(Write-Status -Message "FINISH - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	
+		        #$cursor = $Result.next_cursor
+
+            #}
+
+            Return $Result;
+
+		}
+		catch
+		{
+			Throw $("ERROR OCCURRED SENDING TWEET " + $_.Exception.Message)
+		}
+	}
+	END
+	{
+		(Write-Status -Message "FINISH - Get-TwitterFriendsList function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+}
+
+function Get-TwitterFriendsIds
+{
+	<#
+	.SYNOPSIS
+		Sends a Twitter Tweet
+	
+	.DESCRIPTION
+		Author:  		Collin Chaffin
+		Description:	Sends a Twitter Tweet using OAuth and REST							
+	
+	.PARAMETER TweetMessage
+		The message text of the tweet to be posted
+	
+	.EXAMPLE
+		Send-TwitterTweet -TweetMessage "This is my first tweet using the #PSTwitter Powershell Module!"
+	
+		This example will send a tweet with the above tweet text
+	#>
+	[CmdletBinding()]
+	param (
+		[Parameter(Mandatory = $true)]
+		[ValidateLength(1, 140)]
+		[System.String]
+		$Username
+	)
+	BEGIN
+	{
+		(Write-Status -Message "START  - Get-TwitterFriendsIds function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+	PROCESS
+	{
+		try
+		{			
+			# Twitter does not handle a few special characters properly so let's hexescape them
+			$fixedUsername = $(ConvertTo-HexEscaped -InputText $Username)
+			
+            $Result = @()
+
+            $cursor = -1
+            #While ($cursor -ne 0) {
+
+                $psTwitterMethod = ($psTwitterEndpointFriendsIds -Split '&')[0]
+                $psTwitterEndpoint = ($psTwitterEndpointFriendsIds -Split '&')[1]
+
+
+			    $psTwitterParameters = "screen_name=$($fixedUsername)"
+                
+
+                # Call our main connect routine to do the oAuth heavy lifting
+			    $oAuthRequestString = (Connect-OAuthTwitter $psTwitterEndpointFriendsIds $psTwitterParameters )
+
+			    (Write-Status -Message "START  - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+			
+			    # Call the REST API to handle the final OAUTH GET
+                
+                $URI = "$($psTwitterEndpoint)?$psTwitterParameters"
+
+			    $Result += Invoke-RestMethod -URI $URI -Method $psTwitterMethod -Headers @{ 'Authorization' = $oAuthRequestString } -ContentType "application/x-www-form-urlencoded" #| Out-Null
+
+    			(Write-Status -Message "FINISH - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	
+		        #$cursor = $Result.next_cursor
+
+            #}
+
+            Return $Result;
+
+		}
+		catch
+		{
+			Throw $("ERROR OCCURRED SENDING TWEET " + $_.Exception.Message)
+		}
+	}
+	END
+	{
+		(Write-Status -Message "FINISH - Get-TwitterFriendsIds function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+}
+
 function Get-TwitterFollowers
+{
+	<#
+	.SYNOPSIS
+		Sends a Twitter Tweet
+	
+	.DESCRIPTION
+		Author:  		Collin Chaffin
+		Description:	Sends a Twitter Tweet using OAuth and REST							
+	
+	.PARAMETER TweetMessage
+		The message text of the tweet to be posted
+	
+	.EXAMPLE
+		Send-TwitterTweet -TweetMessage "This is my first tweet using the #PSTwitter Powershell Module!"
+	
+		This example will send a tweet with the above tweet text
+	#>
+	[CmdletBinding()]
+	param (
+		[Parameter(Mandatory = $true)]
+		[ValidateLength(1, 140)]
+		[System.String]
+		$Username
+	)
+	BEGIN
+	{
+		(Write-Status -Message "START  - Get-TwitterFollowers function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+	PROCESS
+	{
+		try
+		{			
+
+            $Friends = @()
+
+            $Ids = Get-TwitterFollowersIds $Username
+
+            $m = 100; $i=0; $j=0
+            
+            while ($i -lt $ids.ids.count) {
+
+                $i++; $j++
+
+                If ($j -eq $m) {
+                
+                    $iStart = $i - $m; $iEnd = $i - 1
+                    $user_id = $Ids.ids[$iStart..$iEnd]
+                    $Friends += Get-TwitterUserLookup ($user_id -join ',')
+                    $j=0 
+
+                }
+
+            }
+
+            If ($j) { 
+            
+                $iStart = $i - $j; $iEnd = $i - 1
+                $user_id = $Ids.ids[$iStart..$iEnd]
+                $Friends += Get-TwitterUserLookup ($user_id -join ',')
+            
+            }
+
+
+            Return $Friends;
+
+		}
+		catch
+		{
+			Throw $("ERROR OCCURRED SENDING TWEET " + $_.Exception.Message)
+		}
+	}
+	END
+	{
+		(Write-Status -Message "FINISH - Get-TwitterFollowers function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+}
+
+
+function Get-TwitterFollowersList
 {
 	<#
 	.SYNOPSIS
@@ -1225,7 +1212,7 @@ function Get-TwitterFollowers
 			    $psTwitterParameters = "screen_name=$($fixedUsername)"
 
                 # Call our main connect routine to do the oAuth heavy lifting
-			    $oAuthRequestString = (Connect-OAuthTwitterUniversal $psTwitterEndpointFollowers $psTwitterParameters )
+			    $oAuthRequestString = (Connect-OAuthTwitter $psTwitterEndpointFollowers $psTwitterParameters )
 
 			    (Write-Status -Message "START  - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
 			
@@ -1255,7 +1242,7 @@ function Get-TwitterFollowers
 	}
 }
 
-function Get-TwitterFriends
+function Get-TwitterFollowersIds
 {
 	<#
 	.SYNOPSIS
@@ -1282,7 +1269,146 @@ function Get-TwitterFriends
 	)
 	BEGIN
 	{
-		(Write-Status -Message "START  - Get-TwitterFollowers function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+		(Write-Status -Message "START  - Get-TwitterFollowersIds function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+	PROCESS
+	{
+		try
+		{			
+			# Twitter does not handle a few special characters properly so let's hexescape them
+			$fixedUsername = $(ConvertTo-HexEscaped -InputText $Username)
+			
+            $Result = @()
+
+            $psTwitterMethod = ($psTwitterEndpointFollowersIds -Split '&')[0]
+            $psTwitterEndpoint = ($psTwitterEndpointFollowersIds -Split '&')[1]
+			$psTwitterParameters = "screen_name=$($fixedUsername)"
+
+            # Call our main connect routine to do the oAuth heavy lifting
+			$oAuthRequestString = (Connect-OAuthTwitter $psTwitterEndpointFollowersIds $psTwitterParameters )
+
+			(Write-Status -Message "START  - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+			
+			# Call the REST API to handle the final OAUTH GET
+                
+            $URI = "$($psTwitterEndpoint)?$psTwitterParameters"
+
+			$Result += Invoke-RestMethod -URI $URI -Method $psTwitterMethod -Headers @{ 'Authorization' = $oAuthRequestString } -ContentType "application/x-www-form-urlencoded" #| Out-Null
+
+    		(Write-Status -Message "FINISH - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	
+            Return $Result;
+
+		}
+		catch
+		{
+			Throw $("ERROR OCCURRED SENDING TWEET " + $_.Exception.Message)
+		}
+	}
+	END
+	{
+		(Write-Status -Message "FINISH - Get-TwitterFriendsIds function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+}
+
+
+
+function Get-TwitterUserLookup
+{
+	<#
+	.SYNOPSIS
+		Sends a Twitter Tweet
+	
+	.DESCRIPTION
+		Author:  		Collin Chaffin
+		Description:	Sends a Twitter Tweet using OAuth and REST							
+	
+	.PARAMETER TweetMessage
+		The message text of the tweet to be posted
+	
+	.EXAMPLE
+		Send-TwitterTweet -TweetMessage "This is my first tweet using the #PSTwitter Powershell Module!"
+	
+		This example will send a tweet with the above tweet text
+	#>
+	[CmdletBinding()]
+	param (
+		[Parameter(Mandatory = $true)]
+		[System.String]
+		$Ids
+	)
+	BEGIN
+	{
+		(Write-Status -Message "START  - Get-UserLookupByIds function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+	PROCESS
+	{
+		try
+		{			
+			# Twitter does not handle a few special characters properly so let's hexescape them
+			
+            $Result = @()
+
+            $psTwitterMethod = ($psTwitterEndpointUserLookup -Split '&')[0]
+            $psTwitterEndpoint = ($psTwitterEndpointUserLookup -Split '&')[1]
+
+			$psTwitterParameters = "user_id=" + [System.Uri]::EscapeDataString($ids)
+                
+            # Call our main connect routine to do the oAuth heavy lifting
+			$oAuthRequestString = (Connect-OAuthTwitter $psTwitterEndpointUserLookup $psTwitterParameters )
+
+			(Write-Status -Message "START  - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+			
+			# Call the REST API to handle the final OAUTH GET
+                
+            $URI = "$($psTwitterEndpoint)?$psTwitterParameters"
+
+			$Result = Invoke-RestMethod -URI $URI -Method $psTwitterMethod -Headers @{ 'Authorization' = $oAuthRequestString } -ContentType "application/x-www-form-urlencoded" #| Out-Null
+
+    		(Write-Status -Message "FINISH - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+
+            Return $Result;
+
+		}
+		catch
+		{
+			Throw $("ERROR OCCURRED LOOKING UP USER " + $_.Exception.Message)
+		}
+	}
+	END
+	{
+		(Write-Status -Message "FINISH - Get-UserLookupByIds function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+	}
+}
+
+function Get-TwitterFriendsIds
+{
+	<#
+	.SYNOPSIS
+		Sends a Twitter Tweet
+	
+	.DESCRIPTION
+		Author:  		Collin Chaffin
+		Description:	Sends a Twitter Tweet using OAuth and REST							
+	
+	.PARAMETER TweetMessage
+		The message text of the tweet to be posted
+	
+	.EXAMPLE
+		Send-TwitterTweet -TweetMessage "This is my first tweet using the #PSTwitter Powershell Module!"
+	
+		This example will send a tweet with the above tweet text
+	#>
+	[CmdletBinding()]
+	param (
+		[Parameter(Mandatory = $true)]
+		[ValidateLength(1, 140)]
+		[System.String]
+		$Username
+	)
+	BEGIN
+	{
+		(Write-Status -Message "START  - Get-TwitterFriendsIds function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
 	}
 	PROCESS
 	{
@@ -1296,12 +1422,15 @@ function Get-TwitterFriends
             $cursor = -1
             #While ($cursor -ne 0) {
 
-                $psTwitterMethod = ($psTwitterEndpointFriends -Split '&')[0]
-                $psTwitterEndpoint = ($psTwitterEndpointFriends -Split '&')[1]
+                $psTwitterMethod = ($psTwitterEndpointFriendsIds -Split '&')[0]
+                $psTwitterEndpoint = ($psTwitterEndpointFriendsIds -Split '&')[1]
+
+
 			    $psTwitterParameters = "screen_name=$($fixedUsername)"
+                
 
                 # Call our main connect routine to do the oAuth heavy lifting
-			    $oAuthRequestString = (Connect-OAuthTwitterUniversal $psTwitterEndpointFriends $psTwitterParameters )
+			    $oAuthRequestString = (Connect-OAuthTwitter $psTwitterEndpointFriendsIds $psTwitterParameters )
 
 			    (Write-Status -Message "START  - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
 			
@@ -1327,7 +1456,7 @@ function Get-TwitterFriends
 	}
 	END
 	{
-		(Write-Status -Message "FINISH - Get-TwitterFollowers function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+		(Write-Status -Message "FINISH - Get-TwitterFriendsIds function execution" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
 	}
 }
 
@@ -1367,18 +1496,19 @@ function Send-TwitterTweet
 			# Twitter does not handle a few special characters properly so let's hexescape them
 			$fixedTweetMessage = $(ConvertTo-HexEscaped -InputText $TweetMessage)
 			
-			# Call our main connect routine to do the oAuth heavy lifting
-			$oAuthRequestString = (Connect-OAuthTwitter -TweetMessage $fixedTweetMessage)
+                $psTwitterMethod = ($psTwitterEndpointTweet -Split '&')[0]
+                $psTwitterEndpoint = ($psTwitterEndpointTweet -Split '&')[1]
+			    $psTwitterParameters = "status=$($fixedTweetMessage)"
+
+            # Call our main connect routine to do the oAuth heavy lifting
+			$oAuthRequestString = (Connect-OAuthTwitter $psTwitterEndpointTweet $psTwitterParameters )
 			
-			# Set up the HTTP POST body
-			$httpBody = "status=$fixedTweetMessage"
-			
-			(Write-Status -Message "START  - Sending HTTP POST via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-			
+			(Write-Status -Message "START  - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+
 			# Call the REST API to handle the final OAUTH POST
-			Invoke-RestMethod -URI $psTwitterEndpointTweet -Method Post -Body $httpBody -Headers @{ 'Authorization' = $oAuthRequestString } -ContentType "application/x-www-form-urlencoded" | Out-Null
+			Invoke-RestMethod -URI $psTwitterEndpoint -Method $psTwitterMethod -Body $psTwitterParameters -Headers @{ 'Authorization' = $oAuthRequestString } -ContentType "application/x-www-form-urlencoded" | Out-Null
 			
-			(Write-Status -Message "FINISH - Sending HTTP POST via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+			(Write-Status -Message "FINISH - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
 		}
 		catch
 		{
@@ -1433,24 +1563,24 @@ function Send-TwitterDirect
 	{
 		try
 		{
+
 			# Twitter does not handle a few special characters properly so let's hexescape them
 			$fixedDirectMessage = $(ConvertTo-HexEscaped -InputText $DirectMessage)
 			
-			# Call our main connect routine to do the oAuth heavy lifting
-			$oAuthRequestString = (Connect-OAuthTwitter -DirectMessage $fixedDirectMessage -To $To)
+                $psTwitterMethod = ($psTwitterEndpointDirectMessage -Split '&')[0]
+                $psTwitterEndpoint = ($psTwitterEndpointDirectMessage -Split '&')[1]
+			    $psTwitterParameters = "screen_name=$To&text=$($fixedDirectMessage)"
+
+            # Call our main connect routine to do the oAuth heavy lifting
+			$oAuthRequestString = (Connect-OAuthTwitter $psTwitterEndpointDirectMessage $psTwitterParameters )
 			
-			# Should not have to do this but run recipient though standard escaping just in case
-			$To = [System.Uri]::EscapeDataString($To)
-			
-			# Set up the HTTP POST body
-			$httpBody = "text=$fixedDirectMessage&screen_name=$To"
-			
-			(Write-Status -Message "START  - Sending HTTP POST via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
-			
+			(Write-Status -Message "START  - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+
 			# Call the REST API to handle the final OAUTH POST
-			Invoke-RestMethod -URI $psTwitterEndpointDirectMessage -Method Post -Body $httpBody -Headers @{ 'Authorization' = $oAuthRequestString } -ContentType "application/x-www-form-urlencoded" | Out-Null
+			Invoke-RestMethod -URI $psTwitterEndpoint -Method $psTwitterMethod -Body $psTwitterParameters -Headers @{ 'Authorization' = $oAuthRequestString } -ContentType "application/x-www-form-urlencoded" | Out-Null
 			
-			(Write-Status -Message "FINISH - Sending HTTP POST via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+			(Write-Status -Message "FINISH - Sending HTTP $psTwitterMethod via REST to Twitter" -Status "INFO" -Debugging:$psTwitterDebugging -Logging:$psTwitterLogging -Logpath $psTwitterLogPath)
+
 		}
 		catch
 		{
@@ -1954,9 +2084,14 @@ function Call-PSTwitter-API_psf
 
 #endregion
 
+Export-ModuleMember Set-TwitterOAuthTokens
+
 Export-ModuleMember Send-TwitterTweet
 Export-ModuleMember Send-TwitterDirect
-Export-ModuleMember Set-TwitterOAuthTokens
+
 Export-ModuleMember Get-TwitterFollowers
 Export-ModuleMember Get-TwitterFriends
-	
+
+
+
+
